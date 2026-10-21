@@ -1,8 +1,18 @@
-# Repository Auditor — AI-Powered DevOps Repository Auditing Agent
+# 🛡️ AI-Powered DevOps Repository Auditing Agent
+
+<div align="center">
+
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 An AI-powered DevOps repository auditing agent that examines GitHub repositories, investigates potential engineering and configuration issues, and produces structured, evidence-based audit reports with actionable recommendations.
 
 Unlike a fixed checklist that runs the same inspections against every repository, Repository Auditor uses an LLM-driven tool-calling loop to select inspection tools based on the information observed, investigate relevant files, and gather additional evidence before submitting its findings.
+
+</div>
+
+---
 
 ## Table of Contents
 
@@ -22,6 +32,8 @@ Unlike a fixed checklist that runs the same inspections against every repository
 - [Limitations](#limitations)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+
+---
 
 ## Overview
 
