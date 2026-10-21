@@ -147,23 +147,22 @@ def test_investigate_executes_llm_selected_tool_then_submits(monkeypatch):
 
     calls = [
         SimpleNamespace(name="list_files", args={}),
+        SimpleNamespace(name="search_code", args={"pattern": "password"}),
+        SimpleNamespace(name="read_file", args={"path": "pyproject.toml"}),
         SimpleNamespace(name="submit_report", args={"violations": []}),
     ]
+
     responses = [
         SimpleNamespace(
             candidates=[
                 SimpleNamespace(
-                    content=SimpleNamespace(parts=[SimpleNamespace(function_call=calls[0])])
+                    content=SimpleNamespace(
+                        parts=[SimpleNamespace(function_call=call)]
+                    )
                 )
             ]
-        ),
-        SimpleNamespace(
-            candidates=[
-                SimpleNamespace(
-                    content=SimpleNamespace(parts=[SimpleNamespace(function_call=calls[1])])
-                )
-            ]
-        ),
+        )
+        for call in calls
     ]
     requested_tools = []
 
@@ -179,7 +178,15 @@ def test_investigate_executes_llm_selected_tool_then_submits(monkeypatch):
     class FakeTools:
         def list_files(self):
             requested_tools.append("list_files")
-            return ["app.py"]
+            return ["app.py", "README.md"]
+
+        def search_code(self, pattern, path_filter=""):
+            requested_tools.append("search_code")
+            return f"Search completed for pattern: {pattern}. No matches."
+
+        def read_file(self, path, start_line=1, max_lines=400):
+            requested_tools.append("read_file")
+            return "[1] [tool.pytest.ini_options]"
 
     monkeypatch.setattr(agent, "_make_config", lambda force_submit=False: object())
     monkeypatch.setattr(agent, "_user_text", lambda text: SimpleNamespace(text=text))
@@ -193,8 +200,14 @@ def test_investigate_executes_llm_selected_tool_then_submits(monkeypatch):
     monkeypatch.setattr(agent, "call_model", lambda *args, **kwargs: responses.pop(0))
 
     trace = []
-    result = agent.investigate(object(), "test-model", FakeTools(), "https://github.com/a/b", trace)
+    result = agent.investigate(
+        object(), "test-model", FakeTools(), "https://github.com/a/b", trace
+    )
 
     assert result == []
-    assert requested_tools == ["list_files"]
-    assert [item["tool"] for item in trace] == ["list_files"]
+    assert requested_tools == ["list_files", "search_code", "read_file"]
+    assert [item["tool"] for item in trace] == [
+        "list_files",
+        "search_code",
+        "read_file",
+    ]

@@ -50,6 +50,19 @@ You are an expert DevOps repository auditor. You investigate a cloned public Git
 repository with tools, then report DevOps violations by calling submit_report once.
 
 HOW TO WORK
+
+MINIMUM EVIDENCE BEFORE SUBMITTING
+- Do not submit a report until the repository structure has been inspected,
+  security-oriented searches have been performed, and at least one additional
+  area has been reviewed: project configuration/dependencies, CI/CD, tests,
+  source code, or commit history.
+- Select searches and files dynamically based on the repository you discover.
+  These are minimum coverage requirements, not a fixed audit checklist.
+- Follow suspicious search results by reading the relevant file and nearby lines.
+- If an expected file does not exist, inspect the alternatives actually present.
+- If you are asked to continue because evidence coverage is insufficient,
+  investigate the missing areas instead of submitting the same report again.
+
 - Work in a loop: observe, reason, pick a tool, interpret the result, repeat. Decide
   each next step from what you have learned so far. Start with list_files, then
   follow leads. Aim to finish within about 15 turns.
@@ -58,6 +71,12 @@ HOW TO WORK
 - Read what matters: README, .gitignore, dependency manifests and lockfiles, every
   file under .github/workflows/, Dockerfiles, config and env files, build or release
   scripts, test files, and source files near suspicious search hits.
+  IMPORTANT: If read_file returns "... [truncated: continue with
+  start_line=N]", call read_file again with start_line=N to inspect the
+  remaining lines. If a tool response ends with "... [output truncated]",
+  re-read that file in smaller chunks using start_line and max_lines.
+  Never treat truncated output as a complete file or base findings on
+  content you have not actually inspected.
 - Use search_code to hunt for patterns such as: credentials assigned to string
   literals (password, secret, token, api_key), absolute machine paths (/home/,
   /Users/, Windows drive paths), pull_request_target, write-all permissions,
@@ -344,6 +363,108 @@ def _make_config(force_submit=False):
     )
 
 
+
+def _new_evidence_coverage():
+    """Track substantive inspection areas, not just the number of tool calls."""
+    return {
+        "structure": False,
+        "security": False,
+        "project_setup": False,
+        "delivery": False,
+        "testing": False,
+        "source": False,
+        "history": False,
+    }
+
+
+def _record_evidence(coverage, tool_name, args, output):
+    """Record which areas were actually inspected through the agent's tools."""
+    path = str(args.get("path", "")).lower()
+    pattern = str(args.get("pattern", "")).lower()
+    result = str(output).lower()
+
+    if tool_name == "list_files":
+        coverage["structure"] = True
+
+    if tool_name == "git_log":
+        if "error:" not in result:
+            coverage["history"] = True
+
+    if tool_name == "run_ruff":
+        if "unavailable" not in result and "timed out" not in result:
+            coverage["testing"] = True
+
+    if tool_name == "search_code":
+        security_terms = (
+            "password", "passwd", "secret", "token", "api_key",
+            "api-key", "private_key", "credential", "authorization",
+            "eval(", "exec(", "pull_request_target",
+        )
+        if any(term in pattern for term in security_terms):
+            coverage["security"] = True
+
+    if tool_name == "read_file":
+        name = path.rsplit("/", 1)[-1]
+
+        if name in {
+            "requirements.txt", "pyproject.toml", "package.json",
+            "package-lock.json", "poetry.lock", "pipfile",
+            "pipfile.lock", "cargo.toml", "go.mod", "pom.xml",
+            "build.gradle", "gemfile",
+        }:
+            coverage["project_setup"] = True
+
+        if (
+            ".github/workflows/" in path
+            or name.startswith("dockerfile")
+            or name in {
+                "makefile", "jenkinsfile", "docker-compose.yml",
+                "docker-compose.yaml", "compose.yml", "compose.yaml",
+            }
+        ):
+            coverage["delivery"] = True
+
+        if (
+            "test" in path.split("/")
+            or path.startswith("tests/")
+            or name.startswith("test_")
+            or name.endswith("_test.py")
+        ):
+            coverage["testing"] = True
+
+        source_extensions = (
+            ".py", ".js", ".ts", ".tsx", ".jsx", ".php",
+            ".java", ".go", ".rb", ".rs", ".cs", ".cpp", ".c",
+        )
+        if path.endswith(source_extensions):
+            coverage["source"] = True
+
+    return coverage
+
+
+def _coverage_gaps(coverage):
+    """Require structure, security-oriented searching, and a third review area."""
+    gaps = []
+
+    if not coverage["structure"]:
+        gaps.append("repository structure (list_files)")
+
+    if not coverage["security"]:
+        gaps.append("security-oriented search_code investigation")
+
+    additional_areas = (
+        "project_setup",
+        "delivery",
+        "testing",
+        "source",
+        "history",
+    )
+    if not any(coverage[area] for area in additional_areas):
+        gaps.append("at least one project setup, CI/CD, testing, source, or history review")
+
+    return gaps
+
+
 def investigate(client, model, tools, repo_url, trace):
     """The agent loop. Returns the raw violations list submitted by the model."""
     config = _make_config()
@@ -355,6 +476,7 @@ def investigate(client, model, tools, repo_url, trace):
     ]
     started = time.monotonic()
     nudges = 0
+    coverage = _new_evidence_coverage()
 
     for turn in range(1, MAX_TURNS + 1):
         if time.monotonic() - started > MAX_SECONDS:
@@ -374,9 +496,57 @@ def investigate(client, model, tools, repo_url, trace):
             continue
 
         contents.append(candidate.content)
+
         submitted = _find_submit(candidate.content)
         if submitted is not None:
-            log(f"[turn {turn} | {elapsed:.0f}s] submit_report ({len(submitted)} submitted)")
+            gaps = _coverage_gaps(coverage)
+
+            if gaps:
+                missing = "; ".join(gaps)
+                log(f"[warn] Report rejected: insufficient evidence. Missing: {missing}")
+
+                # Respond to the attempted tool call so the model can continue.
+                submit_call = next(
+                    (
+                        part.function_call
+                        for part in candidate.content.parts
+                        if part.function_call and part.function_call.name == "submit_report"
+                    ),
+                    None,
+                )
+
+                if submit_call is not None:
+                    contents.append(
+                        types.Content(
+                            role="user",
+                            parts=[
+                                types.Part.from_function_response(
+                                    name="submit_report",
+                                    response={
+                                        "result": (
+                                            "Insufficient evidence coverage. "
+                                            f"Investigate these areas: {missing}. "
+                                            "Choose suitable tools dynamically; "
+                                            "do not invent findings."
+                                        )
+                                    },
+                                )
+                            ],
+                        )
+                    )
+
+                nudges += 1
+                if nudges > 3:
+                    raise RuntimeError(
+                        "Audit incomplete: minimum evidence coverage was not achieved."
+                    )
+
+                continue
+
+            log(
+                f"[turn {turn} | {elapsed:.0f}s] submit_report "
+                f"({len(submitted)} submitted; evidence coverage passed)"
+            )
             return submitted
 
         calls = [p.function_call for p in candidate.content.parts if p.function_call]
@@ -393,6 +563,7 @@ def investigate(client, model, tools, repo_url, trace):
         for call in calls:
             args = dict(call.args or {})
             output = execute_tool(tools, call.name, args)
+            _record_evidence(coverage, call.name, args, output)
             safe_args = json.loads(redact(json.dumps(args)))
             shown = json.dumps(safe_args)[:100]
             log(f"[turn {turn} | {elapsed:.0f}s] {call.name}({shown}) -> {len(output)} chars")
