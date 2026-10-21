@@ -311,7 +311,8 @@ def _find_submit(content):
     for part in content.parts:
         call = part.function_call
         if call and call.name == "submit_report":
-            return list((call.args or {}).get("violations") or [])
+            violations = (call.args or {}).get("violations")
+            return violations if isinstance(violations, list) else []
     return None
 
 
@@ -470,12 +471,10 @@ def normalize_violations(raw, tools):
         if line is not None and line > _count_lines(tools, file_path):
             line = None
 
-        keys = [(category, file_path, line, description.lower())]
-        if file_path and line:
-            keys.append((category, file_path, line))
-        if any(key in seen for key in keys):
+        key = (category, file_path, line, re.sub(r"\W+", " ", description.lower()).strip())
+        if key in seen:
             continue
-        seen.update(keys)
+        seen.add(key)
 
         counters[category] = counters.get(category, 0) + 1
         results.append(

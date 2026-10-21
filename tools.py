@@ -22,7 +22,9 @@ SECRET_PATTERNS = [
     re.compile(r"AIza[0-9A-Za-z_\-]{35}"),
     re.compile(r"sk-[A-Za-z0-9_\-]{20,}"),
     re.compile(r"xox[baprs]-[A-Za-z0-9\-]{10,}"),
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+    ),
 ]
 
 # key = "value" style assignments for secret-looking names.
@@ -132,21 +134,20 @@ class RepositoryTools:
                 return f"Error: file '{relative_path}' does not exist."
             if path.is_dir():
                 return f"Error: '{relative_path}' is a directory."
+            if path.stat().st_size > MAX_FILE_BYTES:
+                return f"'{relative_path}' exceeds the {MAX_FILE_BYTES}-byte read limit."
             if self._is_binary(path):
                 return f"'{relative_path}' is a binary file; content not shown."
 
-            out, truncated = [], False
             with open(path, encoding="utf-8", errors="replace") as f:
-                for n, line in enumerate(f, 1):
-                    if n < start_line:
-                        continue
-                    if len(out) >= max_lines:
-                        truncated = True
-                        break
-                    text = redact(line.rstrip("\n")[:MAX_LINE_CHARS])
-                    out.append(f"{n}: {text}")
-            if truncated:
-                out.append(f"... [truncated: continue with start_line={start_line + max_lines}]")
+                safe_content = redact(f.read())
+            lines = safe_content.splitlines()
+            out = []
+            end_line = min(len(lines), start_line - 1 + max_lines)
+            for index in range(start_line - 1, end_line):
+                out.append(f"{index + 1}: {lines[index][:MAX_LINE_CHARS]}")
+            if end_line < len(lines):
+                out.append(f"... [truncated: continue with start_line={end_line + 1}]")
             return "\n".join(out) if out else "(empty file or start_line beyond end of file)"
         except ValueError as e:
             return f"Error: {e}"
@@ -175,17 +176,18 @@ class RepositoryTools:
                 ):
                     continue
                 with open(path, encoding="utf-8", errors="ignore") as f:
-                    for n, line in enumerate(f, 1):
-                        if regex.search(line[:1000]):
-                            matches.append(
-                                {
-                                    "file": rel,
-                                    "line": n,
-                                    "content": redact(line.strip()[:MAX_LINE_CHARS]),
-                                }
-                            )
-                            if len(matches) >= MAX_SEARCH_RESULTS:
-                                return matches
+                    safe_content = redact(f.read())
+                for n, line in enumerate(safe_content.splitlines(), 1):
+                    if regex.search(line[:1000]):
+                        matches.append(
+                            {
+                                "file": rel,
+                                "line": n,
+                                "content": line.strip()[:MAX_LINE_CHARS],
+                            }
+                        )
+                        if len(matches) >= MAX_SEARCH_RESULTS:
+                            return matches
             except (OSError, ValueError):
                 continue
         return matches

@@ -1,7 +1,33 @@
-venv/
-__pycache__/
-*.pyc
+# Environment variables and secrets
 .env
+.env.*
+!.env.example
+
+# Virtual environments
+.venv/
+venv/
+
+# Python cache and compiled files
+__pycache__/
+*.py[cod]
+
+# Test artifacts
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Linting and type-checking caches
+.ruff_cache/
+.mypy_cache/
+
+# Generated audit reports and traces
 report.json
+trace.json
+
+# Temporary files
 *.tmp
+
+# Build and packaging artifacts
+build/
+dist/
+*.egg-info/
